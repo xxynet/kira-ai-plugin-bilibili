@@ -1,0 +1,8 @@
+{
+    "display_name": "B站工具",
+    "plugin_id": "kira-ai-plugin-bilibili",
+    "version": "1.0.0",
+    "author": "xxynet",
+    "description": "赋予 AI 使用B站的能力",
+    "repo": null
+}

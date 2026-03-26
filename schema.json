@@ -1,0 +1,32 @@
+{
+  "sessdata": {
+    "name": "sessdata",
+    "type": "textarea",
+    "default": "",
+    "hint": "B站Cookie中的键值"
+  },
+  "bili_jct": {
+    "name": "bili_jct",
+    "type": "string",
+    "default": "",
+    "hint": "B站Cookie中的键值"
+  },
+  "buvid3": {
+    "name": "buvid3",
+    "type": "string",
+    "default": "",
+    "hint": "B站Cookie中的键值"
+  },
+  "dedeuserid": {
+    "name": "dedeuserid",
+    "type": "string",
+    "default": "",
+    "hint": "B站Cookie中的键值"
+  },
+  "ac_time_value": {
+    "name": "ac_time_value",
+    "type": "string",
+    "default": "",
+    "hint": "B站LocalStorage中的键值"
+  }
+}
