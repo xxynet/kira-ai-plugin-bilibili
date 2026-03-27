@@ -4,5 +4,5 @@
     "version": "1.0.0",
     "author": "xxynet",
     "description": "赋予 AI 使用B站的能力",
-    "repo": null
+    "repo": "https://github.com/xxynet/kira-ai-plugin-bilibili"
 }
