@@ -4,6 +4,7 @@ from datetime import datetime
 
 from bilibili_api import video, comment, search, homepage, Credential, exceptions as bili_e
 from bilibili_api.comment import CommentResourceType
+from bilibili_api.utils import network
 
 from core.plugin import BasePlugin, logger, register
 
@@ -79,6 +80,9 @@ class BiliBiliPlugin(BasePlugin):
         self._credential = None
 
     async def initialize(self):
+        network.select_client("aiohttp")
+        session = network.get_session()
+        session.headers["Accept-Encoding"] = "gzip, deflate"
         self._credential = Credential(
             sessdata=self.plugin_cfg.get("sessdata", ""),
             bili_jct=self.plugin_cfg.get("bili_jct", ""),
