@@ -78,10 +78,12 @@ class BiliBiliPlugin(BasePlugin):
     def __init__(self, ctx, cfg: dict):
         super().__init__(ctx, cfg)
         self._credential = None
+        self._network_client = None
 
     async def initialize(self):
         network.select_client("aiohttp")
-        session = network.get_session()
+        self._network_client = network.get_client()
+        session = self._network_client.get_wrapped_session()
         session.headers["Accept-Encoding"] = "gzip, deflate"
         self._credential = Credential(
             sessdata=self.plugin_cfg.get("sessdata", ""),
@@ -92,7 +94,10 @@ class BiliBiliPlugin(BasePlugin):
         )
 
     async def terminate(self):
-        pass
+        network_client = self._network_client
+        self._network_client = None
+        if network_client:
+            await network_client.close()
 
     @staticmethod
     async def _resolve_b23(url: str) -> str:
