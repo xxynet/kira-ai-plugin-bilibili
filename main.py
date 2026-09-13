@@ -368,9 +368,11 @@ class BiliBiliPlugin(BasePlugin):
             return ToolResult(text="字幕内容为空")
 
         label = track.get("lan_doc") or track.get("lan") or "unknown"
-        text = "字幕语言：" + label + "\n" + "\n".join(
-            f"[{self._format_subtitle_timestamp(start)}] {content}"
-            for start, _, content in entries
+        # Keep the text brief; the full content lives in the SRT attachment
+        text = (
+            f"已获取视频字幕：语言 {label}，共 {len(entries)} 条，"
+            f"时长至 {self._format_subtitle_timestamp(entries[-1][0])}，"
+            f"已保存为 SRT 字幕文件附件，可发送文件或查看文件内容"
         )
 
         # Save as a standard SRT file the user can receive through <file> tags

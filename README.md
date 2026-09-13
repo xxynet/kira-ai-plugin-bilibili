@@ -7,7 +7,7 @@
 | 工具 | 描述 |
 |------|------|
 | `bilibili_video_info` | 通过视频链接获取视频基本信息（支持 `www.bilibili.com/video/` 和 `b23.tv/` 短链） |
-| `bilibili_video_subtitle` | 获取/下载视频的 CC 字幕：返回字幕文本并保存为 SRT 字幕文件（存于 `data/temp/bilibili_subtitles/`；`zh` / `zh-CN` / `zh-Hans` / `zh-TW` 等写法自动归一化；仅部分视频有字幕，AI 字幕需要登录） |
+| `bilibili_video_subtitle` | 获取/下载视频的 CC 字幕：保存为 SRT 字幕文件（存于 `data/temp/bilibili_subtitles/`）并以附件返回，文本仅含摘要；`zh` / `zh-CN` / `zh-Hans` / `zh-TW` 等写法自动归一化；仅部分视频有字幕，AI 字幕需要登录 |
 | `bilibili_search` | 通过关键词搜索 B 站视频，返回前 5 条结果 |
 | `bilibili_feed` | 获取 B 站首页个性化推荐视频 |
 | `like_bilibili_video` | 给指定视频点赞 |
