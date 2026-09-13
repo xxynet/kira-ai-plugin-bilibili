@@ -7,6 +7,9 @@ from bilibili_api.comment import CommentResourceType
 from bilibili_api.utils import network
 
 from core.plugin import BasePlugin, logger, register
+from core.agent.tool import ToolResult
+from core.chat.message_elements import File
+from core.utils.path_utils import get_data_path
 
 
 def format_time(ts):
@@ -133,7 +136,7 @@ class BiliBiliPlugin(BasePlugin):
             f"以下是视频相关信息：bvid: {video_bvid}, title: {title}, description: {desc}, "
             f"分区：{tname} - {tname_v2}, 发布时间：{pubdate}, 作者信息：{up_info}, 互动数据：{stat}"
         )
-        return video_info_str, v, info["aid"]
+        return video_info_str, v, info
 
     @register.tool(
         name="bilibili_video_info",
@@ -186,13 +189,13 @@ class BiliBiliPlugin(BasePlugin):
     )
     async def comment_bilibili_video(self, *_, original_url: str, comment_content: str):
         try:
-            info_str, _, aid = await self._video_handle(original_url)
+            info_str, _, info = await self._video_handle(original_url)
         except Exception as bili_info_e:
             return str(bili_info_e)
 
         result = await comment.send_comment(
             text=comment_content,
-            oid=aid,
+            oid=info["aid"],
             type_=CommentResourceType.VIDEO,
             credential=self._credential
         )
@@ -217,6 +220,166 @@ class BiliBiliPlugin(BasePlugin):
             return res
         except Exception as bili_search_e:
             return str(bili_search_e)
+
+    @staticmethod
+    def _format_subtitle_timestamp(seconds: float) -> str:
+        total = int(seconds)
+        hours, remainder = divmod(total, 3600)
+        minutes, secs = divmod(remainder, 60)
+        if hours:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}:{secs:02d}"
+
+    # Region codes that map onto a script code for language matching
+    _LANG_REGION_TO_SCRIPT = {
+        "cn": "hans", "sg": "hans",
+        "tw": "hant", "hk": "hant", "mo": "hant",
+    }
+
+    @classmethod
+    def _parse_lang_code(cls, code: str) -> tuple[str, str]:
+        """Parse a language code into (base_language, script) for matching.
+
+        Case-insensitive, accepts `_` or `-` separators, maps region codes
+        onto script codes (zh-CN -> zh-hans) and strips the `ai-` prefix
+        Bilibili uses for auto-generated subtitles.
+        """
+        code = (code or "").strip().lower().replace("_", "-")
+        if code.startswith("ai-"):
+            code = code[3:]
+        parts = [p for p in code.split("-") if p]
+        if not parts:
+            return "", ""
+        lang = parts[0]
+        script = ""
+        for p in parts[1:]:
+            if p in ("hans", "hant"):
+                script = p
+            elif p in cls._LANG_REGION_TO_SCRIPT:
+                script = cls._LANG_REGION_TO_SCRIPT[p]
+        return lang, script
+
+    @classmethod
+    def _pick_subtitle_track(cls, tracks: list, lan: str):
+        """Pick the best subtitle track for the requested language.
+
+        Scores each track: exact code match (4), same language and script
+        (3), same base language ignoring AI prefix and script (1); ties and
+        total misses fall back to the first track.
+        """
+        req = (lan or "").strip().lower().replace("_", "-")
+        req_lang, req_script = cls._parse_lang_code(lan)
+        best, best_score = tracks[0], -1
+        for t in tracks:
+            t_lan = (t.get("lan") or "").strip().lower().replace("_", "-")
+            t_lang, t_script = cls._parse_lang_code(t.get("lan") or "")
+            if req and t_lan == req:
+                score = 4
+            elif req_lang and req_script and t_lang == req_lang and t_script == req_script:
+                score = 3
+            elif req_lang and t_lang == req_lang:
+                score = 1
+            else:
+                score = 0
+            if score > best_score:
+                best, best_score = t, score
+        return best
+
+    @staticmethod
+    def _srt_timestamp(seconds: float) -> str:
+        millis = int(round(seconds * 1000))
+        hours, rem = divmod(millis, 3600000)
+        minutes, rem = divmod(rem, 60000)
+        secs, ms = divmod(rem, 1000)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
+
+    @classmethod
+    def _build_srt(cls, entries: list[tuple[float, float, str]]) -> str:
+        cues = []
+        for idx, (start, end, content) in enumerate(entries, start=1):
+            if end <= start:
+                end = start + 2
+            cues.append(
+                f"{idx}\n{cls._srt_timestamp(start)} --> {cls._srt_timestamp(end)}\n{content}\n"
+            )
+        return "\n".join(cues)
+
+    async def _fetch_subtitle(
+        self, v: video.Video, info: dict, lan: str = "", bvid: str = ""
+    ) -> ToolResult:
+        cid = info.get("cid")
+        if cid is None:
+            return ToolResult(text="获取视频 cid 失败，无法获取字幕")
+
+        subtitle_info = await v.get_subtitle(cid=cid)
+        tracks = subtitle_info.get("subtitles") or []
+        if not tracks:
+            return ToolResult(text="该视频没有可用的CC字幕（AI生成字幕需要登录凭据）")
+
+        # Match the requested language with normalization, miss falls back to the first track
+        track = self._pick_subtitle_track(tracks, lan)
+        url = track.get("subtitle_url") or ""
+        if url.startswith("//"):
+            url = "https:" + url
+        if not url:
+            return ToolResult(text="字幕下载地址为空")
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url)
+            data = resp.json()
+
+        body = data.get("body") or []
+        # Strip Bilibili bcc styling tags (e.g. <i>...</i>) for clean plain text
+        entries = [
+            (
+                float(item.get("from", 0) or 0),
+                float(item.get("to", 0) or 0),
+                re.sub(r"<.*?>", "", item.get("content", "")).strip(),
+            )
+            for item in body
+            if item.get("content")
+        ]
+        if not entries:
+            return ToolResult(text="字幕内容为空")
+
+        label = track.get("lan_doc") or track.get("lan") or "unknown"
+        text = "字幕语言：" + label + "\n" + "\n".join(
+            f"[{self._format_subtitle_timestamp(start)}] {content}"
+            for start, _, content in entries
+        )
+
+        # Save as a standard SRT file the user can receive through <file> tags
+        save_dir = get_data_path() / "temp" / "bilibili_subtitles"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        safe_lan = re.sub(r"[^0-9A-Za-z-]", "", track.get("lan") or "sub") or "sub"
+        filename = f"{bvid or 'subtitle'}_{safe_lan}.srt"
+        file_path = save_dir / filename
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(self._build_srt(entries))
+
+        return ToolResult(
+            text=text,
+            attachments=[File(file=str(file_path), name=filename)],
+        )
+
+    @register.tool(
+        name="bilibili_video_subtitle",
+        description="获取/下载B站视频的CC字幕，返回字幕文本并保存为SRT字幕文件，仅部分视频有字幕（AI生成字幕需要登录凭据）",
+        params={
+            "type": "object",
+            "properties": {
+                "original_url": {"type": "string", "description": "B站视频url"},
+                "lan": {"type": "string", "description": "字幕语言代码，如 zh / zh-CN / zh-Hans / zh-TW / en / ai-zh，写法自动归一化，不填默认返回第一条字幕"},
+            },
+            "required": ["original_url"]
+        }
+    )
+    async def bilibili_video_subtitle(self, *_, original_url: str, lan: str = ""):
+        try:
+            _, v, info = await self._video_handle(original_url)
+            return await self._fetch_subtitle(v, info, lan, bvid=info.get("bvid", ""))
+        except Exception as bili_subtitle_e:
+            return ToolResult(text=str(bili_subtitle_e))
 
     async def _get_personalized_feed(self, count: int = 5):
         # 使用登录凭据获取个性化推荐
