@@ -38,6 +38,10 @@ bilibili-api-python
 httpx
 ```
 
+## 网络会话
+
+插件使用自有的 aiohttp 会话注入 bilibili_api 的请求池（`network.set_session`），插件重载或停用时只关闭自己的会话并向池中归还一个可用会话，不影响其他使用 bilibili_api 的插件（如 ada-bilidm 私信适配器）。所有会话均禁用 brotli 压缩以规避 aiohttp 的 brotli 解码问题。
+
 ## 信息
 
 - **插件 ID**: `kira-ai-plugin-bilibili`

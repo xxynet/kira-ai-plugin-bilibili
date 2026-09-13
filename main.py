@@ -1,5 +1,6 @@
 import re
 import httpx
+import aiohttp
 from datetime import datetime
 
 from bilibili_api import video, comment, search, homepage, Credential, exceptions as bili_e
@@ -10,6 +11,13 @@ from core.plugin import BasePlugin, logger, register
 from core.agent.tool import ToolResult
 from core.chat.message_elements import File
 from core.utils.path_utils import get_data_path
+
+# aiohttp raises "Can not decode content-encoding: br" on brotli responses in
+# some environments, so every session this plugin manages forbids brotli
+_AIOHTTP_HEADERS = {"Accept-Encoding": "gzip, deflate"}
+# Attribute stashed on the bilibili_api network module so the injected session
+# survives plugin module reloads (site-packages modules are never evicted)
+_SESSION_ATTR = "_kira_bilibili_plugin_session"
 
 
 def format_time(ts):
@@ -81,13 +89,26 @@ class BiliBiliPlugin(BasePlugin):
     def __init__(self, ctx, cfg: dict):
         super().__init__(ctx, cfg)
         self._credential = None
-        self._network_client = None
 
     async def initialize(self):
         network.select_client("aiohttp")
-        self._network_client = network.get_client()
-        session = self._network_client.get_wrapped_session()
-        session.headers["Accept-Encoding"] = "gzip, deflate"
+        # set_session() rejects an empty per-loop pool, so make sure the default
+        # client exists before injecting ours over it
+        old_client = network.get_client()
+        # Close the session injected by a previous plugin instance (survives reload)
+        prev = getattr(network, _SESSION_ATTR, None)
+        if prev is not None and not prev.closed:
+            await prev.close()
+        # bilibili_api resolves its client from a per-loop pool on every request,
+        # so injecting a plugin-owned session keeps terminate() from breaking
+        # other bilibili_api users (e.g. the bilidm adapter)
+        session = aiohttp.ClientSession(headers=_AIOHTTP_HEADERS)
+        setattr(network, _SESSION_ATTR, session)
+        network.set_session(session)
+        # The pool client just replaced is unreachable now; release its raw session
+        old_session = old_client.get_wrapped_session()
+        if old_session is not session and not old_session.closed:
+            await old_session.close()
         self._credential = Credential(
             sessdata=self.plugin_cfg.get("sessdata", ""),
             bili_jct=self.plugin_cfg.get("bili_jct", ""),
@@ -97,10 +118,14 @@ class BiliBiliPlugin(BasePlugin):
         )
 
     async def terminate(self):
-        network_client = self._network_client
-        self._network_client = None
-        if network_client:
-            await network_client.close()
+        session = getattr(network, _SESSION_ATTR, None)
+        if session is None:
+            return
+        setattr(network, _SESSION_ATTR, None)
+        # Hand a live session back to the pool before closing ours
+        network.set_session(aiohttp.ClientSession(headers=_AIOHTTP_HEADERS))
+        if not session.closed:
+            await session.close()
 
     @staticmethod
     async def _resolve_b23(url: str) -> str:
